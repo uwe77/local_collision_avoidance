@@ -1,0 +1,12 @@
+[submodule "catkin_ws/src/dynamic_obstacle_prediction"]
+	path = catkin_ws/src/dynamic_obstacle_prediction
+	url = git@github.com:uwe77/dynamic_obstacle_prediction.git
+[submodule "catkin_ws/src/jong_shyn"]
+	path = catkin_ws/src/jong_shyn
+	url = git@github.com:ARG-NCTU/jong_shyn.git
+[submodule "catkin_ws/src/jetsea_vessel"]
+	path = catkin_ws/src/jetsea_vessel
+	url = git@github.com:ARG-NCTU/jetsea_vessel.git
+[submodule "catkin_ws/src/vrx"]
+	path = catkin_ws/src/vrx
+	url = git@github.com:ARG-NCTU/vrx.git
