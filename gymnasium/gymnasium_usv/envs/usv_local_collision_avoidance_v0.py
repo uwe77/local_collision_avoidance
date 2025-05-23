@@ -15,16 +15,8 @@ from types import Optional
 from gymnasium_usv.utils import (
     GazeboUSVModel,
     GazeboBaseModel,
+    GazeboROSConnector
 )
-
-class GazeboROSConnector:
-    def __init__(self):
-        rospy.wait_for_service('/gazebo/pause_physics')
-        rospy.wait_for_service('/gazebo/unpause_physics')
-        self.reset_world = rospy.ServiceProxy('/gazebo/reset_world', Empty)
-        self.pause_physics = rospy.ServiceProxy('/gazebo/pause_physics', Empty)
-        self.unpause_physics = rospy.ServiceProxy('/gazebo/unpause_physics', Empty)
-        os.system('gz physics -u 0')
 
 class USVLocalCollisionAvoidanceV0(gym.Env):
 
@@ -33,47 +25,32 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         usv_name: str = "js",
         enable_obstacle: bool = False,
         obstacle_max_speed: float = 5.0,
+        reset_range: float = 200.0,
     ):
         super().__init__()
 
         self.info = {
             'usv_name': usv_name,
+            'reset_range': reset_range,
             'current_step': 0,
             'max_steps': 4096,
             'max_reward': 100,
             'max_laser_dis': 100,
             'max_track_dis': 30,
             'max_vel': np.inf,
-            'laser_shape': (4, 241),
-            'track_shape': (1, 3),
-            'vel_shape': (1, 2),
-            'action_shape': (2,),
+            'laser_shape': (241, ),
+            'track_shape': (3, ),
+            'vel_shape': (2, ),
+            'action_shape': (2, ),
             'goal_pose': np.array([0,0,0]),
             'goal_range': 8, # meters
-            'safe_laser_range': 15,
-            'constraint_costs': np.zeros(1),
-            'task': 'empty',
-            'action_gamma': np.array([0.01, 0.25]),
-            'last_action': np.zeros(2),
-        }
-        self.stack = {
-            "laser": None,
-            "track": None,
-            "vel": None
+            'safe_laser_range': 30,
+            'collision_laser_range': 15,
         }
         self.last_data = {
             'dist_to_goal': None,
             'total_dist': 0,
             'init_dist_to_goal': None,
-        }
-        self.task = {
-            # 'empty      ': [np.array([-241, 402]), np.array([257, 402])],
-            # 'empty_avoid': [np.array([-251.58, -157.77]), np.array([242.71, -187.49])],
-            'turn       ': [np.array([12.87, 133.81]), np.array([227.27, -16.94])],
-            'uturn      ': [np.array([-86.30, -88.06]), np.array([-81.5, 136.16])],
-            'aline      ': [np.array([8.75, -85]), np.array([229.75, -98])],
-            'aline_avoid': [np.array([-113.73, 26.33]), np.array([143.69, 3.92])],
-            'init_nav_fc': [np.array([0, 0]), np.array([0, 30])],
         }
         self.obs = None
         self.termination = False
@@ -88,18 +65,20 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         self.gazebo.unpause_physics()
         
         # self.__reset_usv_pose()
-        self.__reset_task_pose('empty      ')
+        self.__reset_usv_and_goal()
 
         self.observation_space = gym.spaces.Dict({
             "laser": gym.spaces.Box(
-                low=0, high=self.info['max_laser_dis'], 
+                low=0,
+                high=self.info['max_laser_dis'], 
                 shape=self.info['laser_shape'], dtype=np.float64),
             "track": gym.spaces.Box(
-                low=np.tile(np.array([-self.info['max_track_dis'], -self.info['max_track_dis'], -np.pi]), (self.info['track_shape'][0], 1)),
-                high=np.tile(np.array([self.info['max_track_dis'], self.info['max_track_dis'], np.pi]), (self.info['track_shape'][0], 1)), 
+                low=np.array([0, -np.pi, -np.pi]),
+                high=np.array([self.info['max_track_dis'], np.pi, np.pi]),
                 shape=self.info['track_shape'], dtype=np.float64),
             "vel": gym.spaces.Box(
-                low=-self.info['max_vel'], high=self.info['max_vel'],
+                low=-self.info['max_vel'], 
+                high=self.info['max_vel'],
                 shape=self.info['vel_shape'], dtype=np.float64)
         })
         self.action_space = spaces.Box(
@@ -110,31 +89,24 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         print("USV Local Collision Avoidance V0 Environment Initialized")
         print("Observation Space: ", self.observation_space)
         print("Action Space: ", self.action_space)
-        self.__reset_goal(0, 0, random.uniform(-np.pi, np.pi))
+        self.reset()
+        # self.__reset_goal(0, 0, random.uniform(-np.pi, np.pi))
 
 
     def step(self, action):
         self.info['current_step'] += 1
-
-        self.info['last_action'][0] = self.info['action_gamma'][0] * action[0] + (1 - self.info['action_gamma'][0]) * self.info['last_action'][0]
-        self.info['last_action'][1] = self.info['action_gamma'][1] * action[0] + (1 - self.info['action_gamma'][1]) * self.info['last_action'][1]
-        
         self.gazebo.unpause_physics()
-        self.usv.step(self.info['last_action'])
+        self.usv.step(action)
         self.get_observation()
-        self.reward = self.get_reward(self.info['last_action'])
+        self.reward = self.get_reward(action)
         
         if self.info['current_step'] >= self.info['max_steps']:
             self.truncation = True
-            # self.reward = -self.info['max_reward'] * 0.5
 
         self.gazebo.pause_physics()
-        min_laser_dis = np.min(self.stack['laser'][-1])
-        output = "\rstep:{:4d}, task:{}, reward:{}, min_laser: {}".format(
+        output = "\rstep:{:4d}, reward:{}".format(
             self.info['current_step'],
-            self.info['task'],
             " {:4.2f}".format(self.reward*self.info['max_reward']) if self.reward >= 0 else "{:4.2f}".format(self.reward*self.info['max_reward']),
-            " {:4.2f}".format(min_laser_dis),
         )
         sys.stdout.write(output)
         sys.stdout.flush()
@@ -145,17 +117,11 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         super().reset(seed=seed)
         print()
         self.gazebo.unpause_physics()
-        self.stack['laser'] = None
-        self.stack['track'] = None
-        self.stack['vel'] = None
         self.info['current_step'] = 0
-        self.info['last_action'] = np.zeros(2)
-        self.info['constraint_costs'] = np.zeros(1)
         self.reward = 0
         self.termination = False
         self.truncation = False
-        task = random.choice(list(self.task.keys()))
-        self.__reset_task_pose(task)
+        self.__reset_usv_and_goal()
         self.usv.update_state()
         self.last_data['init_dist_to_goal'] = np.linalg.norm(self.info['goal_pose'][:2] - self.usv.pose[:2])
         self.last_data['dist_to_goal'] = self.last_data['init_dist_to_goal']
@@ -170,28 +136,12 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         angle = (angle + np.pi) % (2 * np.pi) - np.pi
         dist_diff = np.linalg.norm(posi_diff)
         
-        if dist_diff > self.info['max_track_dis']:
-            posi_diff = self.info['max_track_dis']*np.array([np.cos(angle), np.sin(angle)])
-        else:
-            posi_diff = dist_diff*np.array([np.cos(angle), np.sin(angle)])
-        # dist_diff = np.clip(dist_diff, 0, self.info['max_track_dis'])
-        
         angle_diff = self.info['goal_pose'][2] - self.usv.pose[2]
         angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi
 
-        track_pos = np.array([posi_diff[0], posi_diff[1], angle_diff])
-
-        if self.stack['track'] is None:
-            self.stack['track'] = np.tile(track_pos, (self.info['track_shape'][0], 1))
-        else:
-            self.stack['track'][:-1] = self.stack['track'][1:]
-            self.stack['track'][-1] = track_pos
-
-        if self.stack['vel'] is None:
-            self.stack['vel'] = np.tile(self.usv.local_vel, (self.info['vel_shape'][0], 1))
-        else:
-            self.stack['vel'][:-1] = self.stack['vel'][1:]
-            self.stack['vel'][-1] = self.usv.local_vel
+        track = np.array([np.clip(dist_diff, self.info['max_track_dis']), angle, angle_diff])
+        
+        vel = self.usv.local_vel
 
         scan = np.array(self.usv.laser.ranges)
         # scan = self.__scan_encoder(self.usv.laser)
@@ -199,16 +149,7 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
             scan = np.full(self.info['laser_shape'][1], self.info['max_laser_dis'])
         scan = np.clip(scan, 0, self.info['max_laser_dis'])
 
-        if self.stack['laser'] is None:
-            self.stack['laser'] = np.tile(scan, (self.info['laser_shape'][0], 1))
-        else:
-            self.stack['laser'][:-1] = self.stack['laser'][1:]
-            self.stack['laser'][-1] = scan
-
-        laser = self.stack['laser']
-        track = self.stack['track']
-        vel = self.stack['vel']
-        self.obs = {"laser": laser, "track": track, "vel": vel}
+        self.obs = {"laser": scan, "track": track, "vel": vel}
         return self.obs
 
     def get_reward(self, action):
@@ -329,7 +270,6 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
                 nav_reward = 0
                 self.termination = True
         # collision_penalty = 0
-        # min_laser_dis = np.min(self.stack['laser'][-1])
 
         # if min_laser_dis < self.info['safe_laser_range'] or self.usv.contact is True:
         #     # If truly collided after some steps
@@ -412,45 +352,11 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         pose.orientation.w = quat[3]
         self.usv.set_pose(pose)
 
-    def __reset_task_pose(self, task):
-        if task not in self.task:
-            print("Task not found")
-            return
-        goal_index = random.choice([0, 1])
-        veh_index = 1-goal_index
-        self.info['task'] = task
-        goal_posi = self.task[self.info['task']][goal_index]
-        veh_posi = self.task[self.info['task']][veh_index]
-        self.__reset_goal(goal_posi[0],goal_posi[1],random.uniform(-np.pi, np.pi))
-        self.__reset_usv_pose(veh_posi[0], veh_posi[1],random.uniform(-np.pi, np.pi))
-
-
-    def __scan_encoder(self, laser: LaserScan):
-        length = len(laser.ranges)
-        angles = laser.angle_min + np.arange(length) * laser.angle_increment
-        ranges = np.array(laser.ranges)
-        
-        # Define sector masks for a full circle (adjust if needed)
-        sectors = [
-            (angles >= -np.pi/8) & (angles < np.pi/8),                    # front
-            (angles >= np.pi/8) & (angles < 3*np.pi/8),                      # front_right
-            (angles >= 3*np.pi/8) & (angles < 5*np.pi/8),                    # right
-            (angles >= 5*np.pi/8) & (angles < 7*np.pi/8),                    # back_right
-            (angles >= 7*np.pi/8) | (angles < -7*np.pi/8),                   # back (wrap-around)
-            (angles >= -7*np.pi/8) & (angles < -5*np.pi/8),                  # back_left
-            (angles >= -5*np.pi/8) & (angles < -3*np.pi/8),                  # left
-            (angles >= -3*np.pi/8) & (angles < -np.pi/8)                     # front_left
-        ]
-        
-        compressed_scan = np.zeros(8)
-        
-        for idx, mask in enumerate(sectors):
-            sector_points = ranges[mask]
-            if sector_points.size > 0:
-                # Average only the points in the sector
-                compressed_scan[idx] = sector_points.sum() / sector_points.size
-            else:
-                # No points in the sector, handle as needed (e.g., leave as 0 or set to NaN)
-                compressed_scan[idx] = 0  # or np.nan
-        
-        return compressed_scan
+    def __reset_usv_and_goal(self):
+        self.__reset_goal(0, 0, random.uniform(-np.pi, np.pi))
+        angle = random.uniform(-np.pi, np.pi)
+        self.__reset_usv_pose(
+            self.info['reset_range']*np.cos(angle), 
+            self.info['reset_range']*np.sin(angle),
+            random.uniform(-np.pi, np.pi)
+            )
