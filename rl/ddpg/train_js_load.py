@@ -1,11 +1,7 @@
-import torch as th
-import torch.nn as nn
-from gymnasium import spaces
-import gymnasium as gym
+import add_path
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.callbacks import CheckpointCallback, StopTrainingOnRewardThreshold
 from stable_baselines3 import DDPG
-from ddpg_callback import OverwriteCheckpointCallback
+from utils.callback.ddpg_save_same_model_cb import DDPGSaveSameModelCB
 
 from datetime import date
 
@@ -15,7 +11,7 @@ vec_env = make_vec_env("gymnasium_vrx:js-collision-v0", n_envs=1)
 
 
 today = date.today()
-checkpoint_callback = OverwriteCheckpointCallback(
+checkpoint_callback = DDPGSaveSameModelCB(
     save_freq=50000,
     save_path="./logs/",
     name_prefix="ddpg_js_nav",
