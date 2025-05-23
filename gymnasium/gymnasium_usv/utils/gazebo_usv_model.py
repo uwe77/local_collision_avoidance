@@ -7,10 +7,10 @@ from .gazebo_base_model import GazeboBaseModel
 from scipy.spatial.transform import Rotation as R
 
 
-class GazeboJSModel(GazeboBaseModel):
+class GazeboUSVModel(GazeboBaseModel):
     
     def __init__(self, name="js", init_pose=Pose()):
-        super(GazeboJSModel, self).__init__(name, init_pose)
+        super(GazeboUSVModel, self).__init__(name, init_pose)
 
         self.__pub_cmd_vel = rospy.Publisher(f"/{name}/cmd_vel", Twist, queue_size=1)
         self.__sub_contact = rospy.Subscriber(f"/{name}/sensors/collision", ContactsState, self.__contact_callback)
@@ -33,7 +33,7 @@ class GazeboJSModel(GazeboBaseModel):
         self.global_vel = np.zeros(2)
         self.action = np.zeros(2)
 
-        return super(GazeboJSModel, self).reset(pose)
+        return super(GazeboUSVModel, self).reset(pose)
 
     def step(self, action = np.zeros(2)):
         

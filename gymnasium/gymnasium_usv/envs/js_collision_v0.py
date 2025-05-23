@@ -11,8 +11,8 @@ from std_msgs.msg import Int64, Header, UInt8
 from std_srvs.srv import Empty
 from sensor_msgs.msg import LaserScan
 
-from gymnasium_cus.utils import (
-    GazeboJSModel,
+from gymnasium_usv.utils import (
+    GazeboUSVModel,
     GazeboBaseModel,
 )
 
@@ -76,7 +76,7 @@ class JsCollisionV0(gym.Env):
         rospy.init_node("js_collision_v0", anonymous=True)
         self.pub_goal = rospy.Publisher("/move_base_simple/goal", PoseStamped, queue_size=1)
         
-        self.js = GazeboJSModel("js")
+        self.js = GazeboUSVModel("js")
         # self.buoy = GazeboBaseModel(name="ks_buoy", init_pose=Pose(position=Point(x=-1000, y=0, z=1)))
         self.gazebo = GazeboROSConnector()
         self.gazebo.unpause_physics()
