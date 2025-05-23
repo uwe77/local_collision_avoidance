@@ -79,7 +79,7 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
                 shape=self.info['vel_shape'], dtype=np.float64)
         })
         self.action_space = spaces.Box(
-            low=np.array([0.0, -1]), 
+            low=np.array([-1, -1]), 
             high=np.array([1, 1]), 
             shape=self.info['action_shape'], dtype=np.float32)
         
@@ -174,6 +174,10 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         rho = dist_diff
         rg = omega_g * (prev_rho - rho)
         self.last_data['dist_to_goal'] = rho
+        if rho < self.info['goal_range']:
+            self.termination = True
+            rg = 4*self.info['max_steps']
+
 
         # 3) Action continuity reward (use observed yaw rate from vel)
         yaw_rate_obs = vel[1]
