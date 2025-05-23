@@ -3,7 +3,7 @@ import os
 import shutil
 
 
-class OverwriteCheckpointCallback(CheckpointCallback):
+class PPOSaveSameModelCB(CheckpointCallback):
     def __init__(
         self,
         save_freq: int,
