@@ -48,13 +48,13 @@ class USVFeatureExtractor(BaseFeaturesExtractor):
         total_dim = 0
 
         # Laser encoder
-        laser_space = observation_space.spaces["laser"]
-        scan_len = laser_space.shape[0]
-        self.extractors["laser"] = LaserEncoder(scan_len)
-        total_dim += self.extractors["laser"].out_dim
+        # laser_space = observation_space.spaces["laser"]
+        # scan_len = laser_space.shape[0]
+        # self.extractors["laser"] = LaserEncoder(scan_len)
+        # total_dim += self.extractors["laser"].out_dim
 
         # Track and vel flatteners
-        for key in ["track", "vel"]:
+        for key in ["laser", "track", "vel"]:
             subspace = observation_space.spaces[key]
             self.extractors[key] = nn.Flatten()
             total_dim += subspace.shape[0]

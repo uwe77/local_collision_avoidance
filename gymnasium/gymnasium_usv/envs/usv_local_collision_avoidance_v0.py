@@ -41,7 +41,7 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
             'action_shape': (2, ),
             'goal_pose': np.array([0,0,0]),
             'goal_range': 8, # meters
-            'safe_laser_range': 30,
+            'safe_laser_range': 50,
             'collision_laser_range': 15,
         }
         self.last_data = {
@@ -79,7 +79,7 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
                 shape=self.info['vel_shape'], dtype=np.float64)
         })
         self.action_space = spaces.Box(
-            low=np.array([-1, -1]), 
+            low=np.array([0, -1]), 
             high=np.array([1, 1]), 
             shape=self.info['action_shape'], dtype=np.float32)
         
@@ -165,7 +165,10 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
 
         # 1) Warning zone reward
         lmin = np.min(laser)
-        rw = omega_w * (lmin - r_usv - wr)/wr
+        rw = omega_w * (lmin - r_usv - wr)/self.info['max_laser_dis']
+        if lmin < self.info['collision_laser_range']:
+            self.termination = True
+            rw = -0.4*self.info['max_steps']
 
         # 2) Goal reaching reward
         posi_diff = self.info['goal_pose'][:2] - self.usv.pose[:2]
@@ -180,10 +183,15 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
 
 
         # 3) Action continuity reward (use observed yaw rate from vel)
-        yaw_rate_obs = vel[1]
-        prev_yaw = self.last_data.get('prev_yaw_rate', 0.0)
-        ra = -omega_a if yaw_rate_obs * prev_yaw < 0 else omega_a
-        self.last_data['prev_yaw_rate'] = yaw_rate_obs
+        # yaw_rate_obs = vel[1]
+        # prev_yaw = self.last_data.get('prev_yaw_rate', 0.0)
+        # ra = -omega_a if yaw_rate_obs * prev_yaw < 0 else omega_a
+        # self.last_data['prev_yaw_rate'] = yaw_rate_obs
+        prev_action = self.last_data.get('prev_action', np.zeros(2))
+        ra = -omega_a if np.linalg.norm(action-prev_action) > 0.5 else omega_a
+        # ra = -omega_a if np.any(prev_action * action < 0) else omega_a
+        self.last_data['prev_action'] = action
+
 
         # 4) COLREGs compliance reward
         idx_min = np.argmin(laser)
