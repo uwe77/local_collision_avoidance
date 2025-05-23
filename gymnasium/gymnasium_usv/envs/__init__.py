@@ -1,2 +1,2 @@
 from gymnasium_usv.envs.js_collision_v0 import JsCollisionV0
-from gymnasium_usv.envs.usv_local_collision_avoidance_v0 import UsvLocalCollisionAvoidanceV0
+from gymnasium_usv.envs.usv_local_collision_avoidance_v0 import USVLocalCollisionAvoidanceV0

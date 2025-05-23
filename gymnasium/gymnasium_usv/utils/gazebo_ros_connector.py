@@ -2,7 +2,7 @@ import rospy, os
 from gazebo_msgs.msg import ODEPhysics
 from gazebo_msgs.srv import SetPhysicsProperties, SetPhysicsPropertiesRequest
 from geometry_msgs.msg import Vector3
-from std_srvs.srv import Empty as EmptySrv
+from std_srvs.srv import Empty
 
 
 class GazeboROSConnector:

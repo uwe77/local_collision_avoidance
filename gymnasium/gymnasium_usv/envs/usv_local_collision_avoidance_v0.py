@@ -8,9 +8,7 @@ import random, sys, os
 from scipy.spatial.transform import Rotation as R
 from geometry_msgs.msg import Pose, PoseStamped, Point
 from std_msgs.msg import Int64, Header, UInt8
-from std_srvs.srv import Empty
 from sensor_msgs.msg import LaserScan
-from types import Optional
 
 from gymnasium_usv.utils import (
     GazeboUSVModel,
@@ -34,7 +32,6 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
             'reset_range': reset_range,
             'current_step': 0,
             'max_steps': 4096,
-            'max_reward': 100,
             'max_laser_dis': 100,
             'max_track_dis': 30,
             'max_vel': np.inf,
@@ -106,7 +103,7 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         self.gazebo.pause_physics()
         output = "\rstep:{:4d}, reward:{}".format(
             self.info['current_step'],
-            " {:4.2f}".format(self.reward*self.info['max_reward']) if self.reward >= 0 else "{:4.2f}".format(self.reward*self.info['max_reward']),
+            " {:4.2f}".format(self.reward) if self.reward >= 0 else "{:4.2f}".format(self.reward),
         )
         sys.stdout.write(output)
         sys.stdout.flush()
@@ -139,7 +136,7 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         angle_diff = self.info['goal_pose'][2] - self.usv.pose[2]
         angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi
 
-        track = np.array([np.clip(dist_diff, self.info['max_track_dis']), angle, angle_diff])
+        track = np.array([np.clip(dist_diff, 0, self.info['max_track_dis']), angle, angle_diff])
         
         vel = self.usv.local_vel
 
@@ -153,173 +150,50 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         return self.obs
 
     def get_reward(self, action):
-        """
-        Modified reward function with:
-        - Yaw velocity penalty (to reduce frequent rotations).
-        - Potential-based reward shaping (to escape local optima).
-        """
+        laser = self.obs['laser']
+        # track = self.obs['track']
+        vel = self.obs['vel']
+        # constants
+        wr = self.info['safe_laser_range']
+        r_usv = self.info['collision_laser_range']  # vessel radius approximation 
+        omega_w = 1.0
+        omega_g = 1.0
+        omega_a = 0.5
+        omega1 = 1.0
+        omega2 = 1.0
+        vmax = vel[0] if vel[0] > 0 else 1.0
 
-        # Discount factor for potential shaping
-        gamma = 0.99
+        # 1) Warning zone reward
+        lmin = np.min(laser)
+        rw = omega_w * (lmin - r_usv - wr)/wr
 
-        # Step penalty (if you want to penalize longer episodes, you can set this > 0)
-        step_penalty = 0.0
+        # 2) Goal reaching reward
+        posi_diff = self.info['goal_pose'][:2] - self.usv.pose[:2]
+        dist_diff = np.linalg.norm(posi_diff)
+        prev_rho = self.last_data['dist_to_goal']
+        rho = dist_diff
+        rg = omega_g * (prev_rho - rho)
+        self.last_data['dist_to_goal'] = rho
 
-        # -------------------------------------------------------------------------
-        # 1) Compute standard variables
-        # -------------------------------------------------------------------------
-        vec_to_goal = self.info['goal_pose'][:2] - self.usv.pose[:2]
-        dist_to_goal = np.linalg.norm(vec_to_goal)
+        # 3) Action continuity reward (use observed yaw rate from vel)
+        yaw_rate_obs = vel[1]
+        prev_yaw = self.last_data.get('prev_yaw_rate', 0.0)
+        ra = -omega_a if yaw_rate_obs * prev_yaw < 0 else omega_a
+        self.last_data['prev_yaw_rate'] = yaw_rate_obs
 
-        # Heading difference to goal in [-pi, pi]
-        aline_to_goal = np.arctan2(vec_to_goal[1], vec_to_goal[0]) - self.usv.pose[2]
-        aline_to_goal = (aline_to_goal + np.pi) % (2 * np.pi) - np.pi
-
-        # Distance difference from last step (positive if we moved closer)
-        dist_diff = self.last_data['dist_to_goal'] - dist_to_goal
-
-        # Track how much total distance we have traveled (if needed)
-        self.last_data['total_dist'] += abs(dist_diff)
-
-        # -------------------------------------------------------------------------
-        # 2) Base navigation reward (your existing logic)
-        # -------------------------------------------------------------------------
-        nav_reward = 0.005 * np.exp(-10 * (aline_to_goal / np.pi) ** 2)
-
-        # Reward forward progress when moving closer to goal with forward velocity
-        if dist_diff > 0.0 and self.usv.local_vel[0] >= 0:
-            nav_reward += 0.005 * np.exp(-250 * (self.usv.local_vel[1]) ** 2) \
-                            * np.clip(self.usv.local_vel[0], 0, 5) / 5
+        # 4) COLREGs compliance reward
+        idx_min = np.argmin(laser)
+        scan_msg = self.usv.laser
+        theta = scan_msg.angle_min + idx_min * scan_msg.angle_increment
+        psi = self.usv.pose[2]
+        speed = abs(vel[0])
+        if -math.radians(5) <= theta < math.radians(112.5):
+            rc = omega1 * (math.pi/2 - psi) * math.exp(-speed / vmax)
+        elif math.radians(247.5) < theta < math.radians(355):
+            rc = omega2 * psi * math.exp(-speed / vmax) if psi <= math.pi/2 else 0.0
         else:
-            # Small penalty if going backward or not improving distance
-            nav_reward += -0.005 * abs(0.2 * self.usv.local_vel[0])
-
-        # -------------------------------------------------------------------------
-        # 3) Goal check (terminal reward)
-        # -------------------------------------------------------------------------
-        if dist_to_goal < self.info['goal_range']:
-            self.termination = True
-            nav_reward += self.info['max_reward']
-
-        # -------------------------------------------------------------------------
-        # 4) Collision penalty (your existing logic)
-        # -------------------------------------------------------------------------
-        compressed_scan = self.__scan_encoder(self.usv.laser)
-        safe_range = self.info['max_laser_dis'] - self.info['safe_laser_range']
-
-        # We'll accumulate a penalty for each sector that is under safe range
-        # Optionally, weight by how relevant that sector is, e.g. if it's the front
-        # sector and we're moving forward, penalize more. This is a simple example:
-        obstacle_penalty = 0.0
-
-        forward_speed = self.usv.local_vel[0]      # linear speed (forward/backward)
-        yaw_speed = self.usv.local_vel[1]*2         # turning speed (positive=left turn, negative=right)
-
-        # Example direction weighting:
-        #   - front sector: penalize if moving forward quickly
-        #   - front_right: penalize if moving forward & turning right
-        #   - right: penalize if turning right
-        #   - back_right: penalize if moving backward & turning right
-        #   - back: penalize if moving backward
-        #   - back_left: penalize if moving backward & turning left
-        #   - left: penalize if turning left
-        #   - front_left: penalize if moving forward & turning left
-        #
-        # You can keep this as simple or detailed as you want. Below is one possible mapping:
-
-        dir_factors = np.zeros(8)
-        # front (0)
-        dir_factors[0] = max(0, forward_speed)
-        # front_right (1)
-        dir_factors[1] = max(0, forward_speed) + max(0, -yaw_speed)
-        # right (2)
-        dir_factors[2] = max(0, -yaw_speed)
-        # back_right (3)
-        dir_factors[3] = max(0, -np.clip(forward_speed,-1,1)) + max(0, -yaw_speed)
-        # back (4)
-        dir_factors[4] = max(0, -np.clip(forward_speed,-1,1))
-        # back_left (5)
-        dir_factors[5] = max(0, -np.clip(forward_speed,-1,1)) + max(0, yaw_speed)
-        # left (6)
-        dir_factors[6] = max(0, yaw_speed)
-        # front_left (7)
-        dir_factors[7] = max(0, forward_speed) + max(0, yaw_speed)
-
-        obstacle_penalty = np.zeros(compressed_scan.shape[0])
-        # if one of a data in commpressed_scan is less than safe_range
-        if np.any(compressed_scan < safe_range):
-            for i, dist in enumerate(compressed_scan):
-            # if dist < safe_range:
-                # Closer → bigger penalty
-                proximity_ratio = 1.0 - (dist / safe_range)  # in [0, 1]
-                # Multiply by the direction factor
-                penalty = proximity_ratio * dir_factors[i]
-                obstacle_penalty[i] = penalty
-
-        obstacle_penalty = np.mean(obstacle_penalty)
-        
-        # We still keep a "hard collision check" if truly collided or extremely close
-        collision_penalty = 0.0
-        min_laser_dis = np.min(compressed_scan)
-
-        # If truly collided or extremely close
-        if min_laser_dis < self.info['safe_laser_range'] or self.usv.contact is True:
-            # If truly collided after some steps
-            if self.info['current_step'] > 10:
-                collision_penalty = np.clip(abs(self.usv.local_vel[0]),1, np.inf) * self.info['max_reward']
-                nav_reward = 0
-                self.termination = True
-        # collision_penalty = 0
-
-        # if min_laser_dis < self.info['safe_laser_range'] or self.usv.contact is True:
-        #     # If truly collided after some steps
-        #     if self.info['current_step'] > 10:
-        #         collision_penalty = abs(self.usv.local_vel[0]) * self.info['max_reward']
-        #         nav_reward = 0
-        #         self.termination = True
-        # else:
-        #     # If not colliding, small "bonus" for safer distance
-        #     collision_penalty = 0.01 * np.exp(-5 * (min_laser_dis / self.info['max_laser_dis']) ** 2)
-
-        # -------------------------------------------------------------------------
-        # 5) Over-deviation: if agent gets too far from initial distance
-        # -------------------------------------------------------------------------
-        if dist_to_goal > self.last_data['init_dist_to_goal'] * 1.5:
-            self.termination = True
-
-        # -------------------------------------------------------------------------
-        # 6) Yaw velocity penalty (new)
-        #    Penalize large angular velocity to discourage frequent rotation
-        # -------------------------------------------------------------------------
-        yaw_vel = self.usv.local_vel[1]   # angular velocity around z-axis
-        yaw_penalty = 0.01 * ((2*yaw_vel) ** 2)
-        
-
-        # -------------------------------------------------------------------------
-        # 7) Combine unshaped reward
-        # -------------------------------------------------------------------------
-        nav_weight = 1.0
-        # collision_weight = 0.1 * np.clip(dist_to_goal, 0, self.info['max_track_dis']) / self.info['max_track_dis']
-        collision_weight = 0.1
-        obstacle_weight = 0.01
-        step_weight = 0.5
-
-        # Base reward (before potential shaping)
-        base_reward = (
-            nav_weight * nav_reward
-            - obstacle_weight * obstacle_penalty
-            - collision_weight * collision_penalty
-            - step_weight * step_penalty
-            - yaw_penalty
-        )
-
-        # Update stored distance for next step
-        self.last_data['dist_to_goal'] = dist_to_goal
-
-        # Final reward
-        proximity_reward = base_reward-self.reward
-        self.reward = base_reward*0.7 + proximity_reward*0.3
-        return self.reward
+            rc = 0.0
+        return rw + rg + ra + rc
 
     def close(self):
         rospy.signal_shutdown('WTF')

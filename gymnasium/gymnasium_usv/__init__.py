@@ -9,6 +9,6 @@ register(
 
 register(
     id="usv-local-collision-avoidance-v0",
-    entry_point="gymnasium_usv.envs:UsvLocalCollisionAvoidanceV0",
+    entry_point="gymnasium_usv.envs:USVLocalCollisionAvoidanceV0",
     max_episode_steps=4096,
 )
