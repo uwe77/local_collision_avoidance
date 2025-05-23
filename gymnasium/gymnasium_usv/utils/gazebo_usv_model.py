@@ -15,7 +15,7 @@ class GazeboUSVModel(GazeboBaseModel):
         self.__pub_cmd_vel = rospy.Publisher(f"/{name}/cmd_vel", Twist, queue_size=1)
         self.__sub_contact = rospy.Subscriber(f"/{name}/sensors/collision", ContactsState, self.__contact_callback)
         self.__sub_laser = rospy.Subscriber(f"/{name}/gazebo/scan", LaserScan, self.__laser_callback)
-        self.alpha_gamma = 0.25
+        self.alpha_gamma = 0.02
         self.action = np.zeros(2)
         self.last_action = np.zeros(2)
         self.last_alpha = np.zeros(2)
