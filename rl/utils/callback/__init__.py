@@ -1,1 +1,2 @@
 from .ppo_save_same_model_cb import PPOSaveSameModelCB
+from .ddpg_save_same_model_cb import DDPGSaveSameModelCB
