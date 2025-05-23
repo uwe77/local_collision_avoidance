@@ -20,10 +20,13 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
 
     def __init__(
         self,
+        *,
         usv_name: str = "js",
         enable_obstacle: bool = False,
         obstacle_max_speed: float = 5.0,
         reset_range: float = 200.0,
+        render_mode: str = None,    # 新增，讓 Gymnasium 的 render_mode 能被接收
+        **kwargs                     # 吞下其他所有多餘參數
     ):
         super().__init__()
 
@@ -175,11 +178,11 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         dist_diff = np.linalg.norm(posi_diff)
         prev_rho = self.last_data['dist_to_goal']
         rho = dist_diff
-        rg = omega_g * (prev_rho - rho)
+        rg = omega_g if (prev_rho - rho) > 0 else -omega_g
         self.last_data['dist_to_goal'] = rho
         if rho < self.info['goal_range']:
             self.termination = True
-            rg = 4*self.info['max_steps']
+            rg = 10*self.info['max_steps']
 
 
         # 3) Action continuity reward (use observed yaw rate from vel)

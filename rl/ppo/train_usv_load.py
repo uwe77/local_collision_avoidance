@@ -6,7 +6,7 @@ from datetime import date
 
 
 # Parallel environments
-vec_env = make_vec_env("usv-local-collision-avoidance-v0", n_envs=1)
+vec_env = make_vec_env("gymnasium_usv:usv-local-collision-avoidance-v0", n_envs=1)
 
 
 today = date.today()
@@ -18,7 +18,7 @@ checkpoint_callback = PPOSaveSameModelCB(
     save_vecnormalize=True,
     overwrite=True,  # ✅ This enables overwrite mode
 )
-model = PPO.load("ppo_usv")
+model = PPO.load("logs/ppo_usv")
 model.entropy_coef = 0.01
 model.learning_rate = 1e-6
 
