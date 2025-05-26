@@ -17,13 +17,13 @@ vec_env = make_vec_env(
         "usv_name": "js",
         "enable_obstacle": False,
         "obstacle_max_speed": 5.0,
-        "reset_range": 50.0,},
+        "reset_range": 200.0,},
     n_envs=1
     )
 
 policy_kwargs = dict(
     features_extractor_class=USVFeatureExtractor,
-    net_arch=(dict(pi=[512, 256, 256], vf=[512, 256, 256])),
+    # net_arch=(dict(pi=[512, 256, 256], vf=[512, 256, 256])),
     activation_fn = th.nn.ELU,
 )
 
@@ -45,7 +45,7 @@ model = PPO("MultiInputPolicy", vec_env,
             n_epochs=1, 
             ent_coef=0.01,
             gae_lambda=0.95,
-            learning_rate=5e-6,
+            learning_rate=1e-4,
             tensorboard_log='tb_ppo'
             )
             

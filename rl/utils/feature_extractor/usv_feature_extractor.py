@@ -39,7 +39,7 @@ class USVFeatureExtractor(BaseFeaturesExtractor):
     def __init__(
         self,
         observation_space: gym.spaces.Dict,
-        features_dim: int = 512,
+        features_dim: int = 256,
     ):
         super().__init__(observation_space, features_dim)
 
@@ -48,20 +48,22 @@ class USVFeatureExtractor(BaseFeaturesExtractor):
         total_dim = 0
 
         # Laser encoder
-        # laser_space = observation_space.spaces["laser"]
-        # scan_len = laser_space.shape[0]
-        # self.extractors["laser"] = LaserEncoder(scan_len)
-        # total_dim += self.extractors["laser"].out_dim
+        laser_space = observation_space.spaces["laser"]
+        scan_len = laser_space.shape[0]
+        self.extractors["laser"] = LaserEncoder(scan_len)
+        total_dim += self.extractors["laser"].out_dim
 
         # Track and vel flatteners
-        for key in ["laser", "track", "vel"]:
+        for key in ["track", "vel"]:
             subspace = observation_space.spaces[key]
             self.extractors[key] = nn.Flatten()
             total_dim += subspace.shape[0]
 
         # Final MLP to desired features_dim
         self.mlp = nn.Sequential(
-            nn.Linear(total_dim, features_dim),
+            nn.Linear(total_dim, 512),
+            nn.ELU(),
+            nn.Linear(512, features_dim),
             nn.ELU(),
             nn.Linear(features_dim, features_dim),
             nn.ELU(),

@@ -6,7 +6,16 @@ from datetime import date
 
 
 # Parallel environments
-vec_env = make_vec_env("gymnasium_usv:usv-local-collision-avoidance-v0", n_envs=1)
+vec_env = make_vec_env(
+    "gymnasium_usv:usv-local-collision-avoidance-v0", 
+    env_kwargs={
+        "render_mode": "none",
+        "usv_name": "js",
+        "enable_obstacle": False,
+        "obstacle_max_speed": 5.0,
+        "reset_range": 200.0,},
+    n_envs=1
+    )
 
 
 today = date.today()
