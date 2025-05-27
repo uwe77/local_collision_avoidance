@@ -185,24 +185,23 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         r_usv = self.info['collision_laser_range']
         max_d = self.info['max_track_dis']
         max_v = max(1.0, vel[0])
-        
+        u = lambda x: x if x > 0 else 0.0  # unit step function
         # 1) 到目標距離、速度、航向差的 shaping
         dist = track[0]  # 已 clip 到 [0, max_d]
         ang  = track[1]  # in [-π, π]
         lmin = laser.min()
 
         # (a) 距離懲罰：與目標距離成正比
-        term_dist = -10.0 * (dist / max_d)
+        term_dist = -100.0 * (dist / max_d)
 
         # (b) 速度懲罰：前進速率越大，離終點越快，但也要保持穩定
-        term_vel  = -10.0 * (abs(vel[0]) / max_v)
+        term_vel  = -100.0 * (abs(vel[0]) / max_v)
 
         # (c) 航向懲罰：航向偏差越大，懲罰越重
         term_ang  = -100.0 * (abs(ang) / np.pi)
 
-        # (d) 對齊獎勵：action 與目標方向夾角越小，獎勵越大
-        align = action[0] * np.cos(ang) + action[1] * np.sin(ang)
-        term_align = +10.0 * align
+        # (d) 對齊獎勵：vel 與目標方向夾角越小，獎勵越大
+        term_align = 10 * max(u(vel[0]),1) * (2 * np.cos(ang) - 1)
 
         # (e) 障礙警告：靠近障礙時輕微懲罰
         if lmin < wr:
