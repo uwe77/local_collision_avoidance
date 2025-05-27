@@ -17,7 +17,7 @@ vec_env = make_vec_env(
         "usv_name": "js",
         "enable_obstacle": False,
         "obstacle_max_speed": 5.0,
-        "reset_range": 200.0,},
+        "reset_range": 100.0,},
     n_envs=1
     )
 
@@ -40,12 +40,13 @@ checkpoint_callback = PPOSaveSameModelCB(
 model = PPO("MultiInputPolicy", vec_env, 
             verbose=1, 
             policy_kwargs=policy_kwargs, 
-            batch_size=128,
-            n_steps=4096,
-            n_epochs=1, 
+            batch_size=64,
             ent_coef=0.01,
-            gae_lambda=0.95,
-            learning_rate=1e-4,
+            gae_lambda=0.98,
+            gamma=0.999,
+            n_epochs=4, 
+            n_steps=512,
+            learning_rate=1e-5,
             tensorboard_log='tb_ppo'
             )
             
