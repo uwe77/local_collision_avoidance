@@ -6,6 +6,7 @@ from datetime import date
 
 
 # Parallel environments
+max_steps = 1024
 vec_env = make_vec_env(
     "gymnasium_usv:usv-local-collision-avoidance-v0", 
     env_kwargs={
@@ -13,7 +14,8 @@ vec_env = make_vec_env(
         "usv_name": "js",
         "enable_obstacle": False,
         "obstacle_max_speed": 5.0,
-        "reset_range": 200.0,},
+        "reset_range": 200.0,
+        "max_steps": max_steps,},
     n_envs=1
     )
 

@@ -10,6 +10,7 @@ from datetime import date
 
 
 # Parallel environments
+max_steps = 1024
 vec_env = make_vec_env(
     "gymnasium_usv:usv-local-collision-avoidance-v0", 
     env_kwargs={
@@ -17,7 +18,9 @@ vec_env = make_vec_env(
         "usv_name": "js",
         "enable_obstacle": False,
         "obstacle_max_speed": 5.0,
-        "reset_range": 100.0,},
+        "reset_range": 400.0,
+        "reset_weight": 0.1,
+        "max_steps": max_steps,},
     n_envs=1
     )
 
@@ -45,8 +48,8 @@ model = PPO("MultiInputPolicy", vec_env,
             gae_lambda=0.98,
             gamma=0.999,
             n_epochs=4, 
-            n_steps=512,
-            learning_rate=1e-5,
+            n_steps=max_steps,
+            learning_rate=3e-4,
             tensorboard_log='tb_ppo'
             )
             

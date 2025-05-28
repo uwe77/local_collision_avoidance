@@ -4,6 +4,7 @@ from geometry_msgs.msg import Pose, Twist
 from gazebo_msgs.msg import ContactsState
 from sensor_msgs.msg import LaserScan
 from .gazebo_base_model import GazeboBaseModel
+from .adaptive_pd_controller import ThrusterControllerPD
 from scipy.spatial.transform import Rotation as R
 
 
@@ -15,7 +16,8 @@ class GazeboUSVModel(GazeboBaseModel):
         self.__pub_cmd_vel = rospy.Publisher(f"/{name}/cmd_vel", Twist, queue_size=1)
         self.__sub_contact = rospy.Subscriber(f"/{name}/sensors/collision", ContactsState, self.__contact_callback)
         self.__sub_laser = rospy.Subscriber(f"/{name}/gazebo/scan", LaserScan, self.__laser_callback)
-        self.alpha_gamma = 1.0
+        self.alpha_gamma = 0.2
+        self.pid = ThrusterControllerPD()
         self.action = np.zeros(2)
         self.last_action = np.zeros(2)
         self.last_alpha = np.zeros(2)
@@ -35,10 +37,10 @@ class GazeboUSVModel(GazeboBaseModel):
 
         return super(GazeboUSVModel, self).reset(pose)
 
-    def step(self, action = np.zeros(2)):
+    def step(self, action = np.zeros(2), dt=0.1):
         
+        action = self.pid.step(action, self.local_vel, dt, adapt=True)
         self.last_alpha = self.alpha_gamma * action + (1 - self.alpha_gamma) * self.last_alpha
-
         self.action = np.array([x if abs(x) >= 1e-3 else 0 for x in self.last_alpha])
         cmd_vel = Twist()
         cmd_vel.linear.x = self.action[0]

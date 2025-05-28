@@ -17,6 +17,42 @@ from gymnasium_usv.utils import (
     GazeboBaseModel,
     GazeboROSConnector
 )
+def navigate(heading_diff: float,
+             goal_dist: float,
+             max_track_dist: float)-> np.ndarray:
+    """
+    Compute forward velocity and yaw rate commands.
+
+    Args:
+        heading_diff (float): heading error to goal, in radians ([-π, +π]).
+        max_yaw_rate (float): maximum allowed yaw rate (rad/s).
+        goal_dist (float): distance to goal (m).
+
+    Returns:
+        forward_vel_cmd (float): commanded forward velocity (m/s).
+        yaw_rate_cmd (float): commanded yaw rate (rad/s).
+    """
+
+    # --- YAW CONTROL (always active) ---
+    Kp_yaw = 1.0/np.pi  # tune as needed
+    yaw_rate_cmd = Kp_yaw * heading_diff
+    # saturate to limits
+    yaw_rate_cmd = np.clip(yaw_rate_cmd, -1, 1)
+
+    # if heading error > 90°, rotate in place only
+    if abs(heading_diff) > np.pi / 2:
+        return 0.0, yaw_rate_cmd
+
+    # --- FORWARD CONTROL (only when roughly facing goal) ---
+    forward_vel = goal_dist/ max_track_dist
+    # reduce speed when heading_diff nonzero
+    forward_vel *= max(0.0, np.cos(heading_diff))
+    # saturate to limits
+    forward_vel_cmd = np.clip(forward_vel, -1.0, 1.0)
+    action = np.zeros(2)
+    action[0] = forward_vel_cmd
+    action[1] = yaw_rate_cmd
+    return action
 
 class USVLocalCollisionAvoidanceV0(gym.Env):
 
@@ -24,10 +60,12 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         self,
         *,
         usv_name: str = "js",
+        max_steps: int = 512,
         enable_obstacle: bool = False,
         obstacle_max_speed: float = 5.0,
         reset_range: float = 200.0,
         step_hz: float = 10.0,
+        pid_hz: float = 100.0,
         render_mode: str = None,    # 新增，讓 Gymnasium 的 render_mode 能被接收
         **kwargs                     # 吞下其他所有多餘參數
     ):
@@ -36,9 +74,11 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         self.info = {
             'usv_name': usv_name,
             'reset_range': reset_range,
+            'reset_weight': 0.5,  # 重置時，x 軸的隨機範圍
             'step_dt': rospy.Duration(1.0 / step_hz),  # how much sim‐time each step should advance
+            'pid_dt': rospy.Duration(1.0 / pid_hz),    # how much sim‐time each PID step should advance
             'current_step': 0,
-            'max_steps': 512,
+            'max_steps': max_steps,
             'max_laser_dis': 100,
             'max_track_dis': 50.0,
             'max_vel': np.inf,
@@ -56,7 +96,6 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
             'dist_to_goal': None,
             'total_dist': 0,
             'init_dist_to_goal': None,
-            # 'laser': None,
             'track': None,
             'vel': None,
         }
@@ -82,8 +121,8 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
                 high=self.info['max_laser_dis'], 
                 shape=self.info['laser_shape'], dtype=np.float64),
             "track": gym.spaces.Box(
-                low=np.array([0, -np.pi]),
-                high=np.array([self.info['max_track_dis'], np.pi]),
+                low=np.array([-self.info['max_track_dis'], -self.info['max_track_dis']]),
+                high=np.array([self.info['max_track_dis'], self.info['max_track_dis']]),
                 shape=self.info['track_shape'], dtype=np.float64),
             "vel": gym.spaces.Box(
                 low=-self.info['max_vel'], 
@@ -103,22 +142,39 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
 
 
     def step(self, action):
+        sigmoid = lambda x: 1 / (1 + np.exp(-5*x)) # x = -1~1
+        d_range = self.info['max_laser_dis'] - self.info['safe_laser_range']
+        center_range = self.info['safe_laser_range'] + d_range / 2
+        lmin = self.obs['laser'].min()
+        laser_weight = np.clip(sigmoid((lmin-center_range) / d_range), 0, 1)
+        track_weight = np.clip(np.linalg.norm(self.obs['track']) / self.info['max_track_dis'], 0 , 1)
+        action_weight = laser_weight * track_weight
         self.gazebo.unpause_physics()
-        self.usv.step(action)
+        # self.usv.step(action, dt=self.info['step_dt'].to_sec())
+        nav_action = navigate(
+            heading_diff=np.arctan2(self.obs['track'][1], self.obs['track'][0]),
+            goal_dist=np.linalg.norm(self.obs['track']),
+            max_track_dist=self.info['max_track_dis']
+        )
+        action[0] = nav_action[0] * action_weight + action[0] * (1 - action_weight)
+        action[1] = nav_action[1] * action_weight + action[1] * (1 - action_weight)
+        self.usv.step(action, dt=self.info['pid_dt'].to_sec())
         self.info['current_step'] += 1
         start = self.info['clock']
         while self.info['clock'] < start + self.info['step_dt']:
-            rospy.sleep(0.0001)
-        # print(f"HZ: {1.0/(self.info['clock']- start).to_sec():.2f}")
+            rospy.sleep(self.info['pid_dt'].to_sec())
+            self.usv.step(action, dt=self.info['pid_dt'].to_sec())
         self.get_observation()
         self.reward = self.get_reward(action)
         
         if self.info['current_step'] >= self.info['max_steps']:
             self.truncation = True
+            self.reward = -self.info['max_steps']/5
 
         self.gazebo.pause_physics()
-        output = "\rstep:{:4d}, track:[{},{}] vel:[{},{}], reward:{}".format(
+        output = "\rstep:{:4d}, action_weight:{}, track:[{},{}] vel:[{},{}], reward:{}".format(
             self.info['current_step'],
+            " {:4.2f}".format(action_weight),
             " {:4.2f}".format(self.obs['track'][0]) if self.obs['track'][0] >= 0 else "{:4.2f}".format(self.obs['track'][0]),
             " {:4.2f}".format(self.obs['track'][1]) if self.obs['track'][1] >= 0 else "{:4.2f}".format(self.obs['track'][1]),
             " {:4.2f}".format(self.obs['vel'][0]) if self.obs['vel'][0] >= 0 else "{:4.2f}".format(self.obs['vel'][0]),
@@ -160,8 +216,11 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         self.last_data['dist_to_goal'] = dist_diff
         # angle_diff = self.info['goal_pose'][2] - self.usv.pose[2]
         # angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi
-
-        track = np.array([np.clip(dist_diff, 0, self.info['max_track_dis']), angle])
+        if dist_diff > self.info['max_track_dis']:
+            track = self.info['max_track_dis']*np.array([np.cos(angle), np.sin(angle)])
+        else:
+            track = dist_diff * np.array([np.cos(angle), np.sin(angle)])
+        # track = np.array([np.clip(dist_diff, 0, self.info['max_track_dis']), angle])
         
         vel = self.usv.local_vel
 
@@ -174,80 +233,52 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         self.obs = {"laser": scan, "track": track, "vel": vel}
         return self.obs
 
-    
     def get_reward(self, action):
         laser = self.obs['laser']
-        track = self.obs['track']   # [dist_diff, angle_diff]
-        vel   = self.obs['vel']     # [v_forward, yaw_rate]
-
-        # 常數
-        wr    = self.info['safe_laser_range']
-        r_usv = self.info['collision_laser_range']
-        max_d = self.info['max_track_dis']
-        max_v = max(1.0, vel[0])
-        u = lambda x: x if x > 0 else 0.0  # unit step function
-        # 1) 到目標距離、速度、航向差的 shaping
-        dist = track[0]  # 已 clip 到 [0, max_d]
-        ang  = track[1]  # in [-π, π]
+        track = self.obs['track']  # [dist_diff, angle, angle_diff]
+        vel = self.obs['vel']
         lmin = laser.min()
 
-        # (a) 距離懲罰：與目標距離成正比
-        term_dist = -100.0 * (dist / max_d)
+        # === 基本量 ===
+        # dist_t = track[0]
+        # heading = track[1]  # difference between heading and target
+        dist_t = np.linalg.norm(track)
+        heading = np.arctan2(track[1], track[0])
+        v_surge = vel[0]
+        max_v_surge = max(abs(v_surge), 1)  # 避免除以零
 
-        # (b) 速度懲罰：前進速率越大，離終點越快，但也要保持穩定
-        term_vel  = -100.0 * (abs(vel[0]) / max_v)
+        goal_range = self.info['goal_range']
+        safe_range = self.info['safe_laser_range']
+        collision_range = self.info['collision_laser_range']
+        max_track_dist = self.info['max_track_dis']
 
-        # (c) 航向懲罰：航向偏差越大，懲罰越重
-        term_ang  = -100.0 * (abs(ang) / np.pi)
+        # === 進展獎勵 ===
+        potential_reward = (1+np.cos(heading))/2
 
-        # (d) 對齊獎勵：vel 與目標方向夾角越小，獎勵越大
-        term_align = 10 * max(u(vel[0]),1) * (2 * np.cos(ang) - 1)
+        # # === 前進獎勵 ===
+        forward_reward = 0.5 * v_surge if v_surge > 0.03 else 0.0
 
-        # (e) 障礙警告：靠近障礙時輕微懲罰
-        if lmin < wr:
-            term_warn = -10.0 * (1.0 - (lmin - r_usv) / (wr - r_usv))
-        else:
-            term_warn = 0.0
+        # # === 減速懲罰（靠近時） ===
+        slow_penalty = -0.75 * abs(v_surge) if dist_t < 2 * goal_range else 0.0
 
-        # (f)) COLREGs compliance reward
-        idx_min = np.argmin(laser)
-        scan_msg = self.usv.laser
-        theta = scan_msg.angle_min + idx_min * scan_msg.angle_increment
-        psi = self.usv.pose[2]
-        speed = abs(vel[0])
-        if -math.radians(5) <= theta < math.radians(112.5):
-            term_colregs = 10 * (math.pi/2 - psi) * math.exp(-speed / max_v)
-        elif math.radians(247.5) < theta < math.radians(355):
-            term_colregs = 10 * psi * math.exp(-speed / max_v) if psi <= math.pi/2 else 0.0
-        else:
-            term_colregs = 0.0
+        # # === 距離獎勵（包含終止條件） ===
+        if dist_t < goal_range:
+            self.termination = True
+            return self.info['max_steps']/5
+        elif self.usv.contact or lmin < collision_range:
+            self.termination = True
+            return -self.info['max_steps']/5
 
-        shaping = term_dist + term_ang + term_vel + term_align + term_warn + term_colregs
+        # === 總 shaping reward ===
+        # shaping = progress_reward + heading_reward + forward_reward + distance_reward + slow_penalty
+        shaping = potential_reward + forward_reward + slow_penalty
 
-        # 2) reward = shaping 差值
+        # === reward 使用 shaping 差值 ===
         if hasattr(self, 'prev_shaping'):
-            reward = shaping - self.prev_shaping
+            reward = (shaping - self.prev_shaping) + potential_reward + forward_reward + slow_penalty
         else:
-            reward = 0.0
+            reward = potential_reward + forward_reward
         self.prev_shaping = shaping
-
-        # 3) 油料/動作改變成本
-        #    油料成本：油門平方項
-        # reward -= 0.3 * (action[0]**2)
-        # #    轉向成本：yaw command 平方項
-        # reward -= 0.03 * (action[1]**2)
-
-        # 4) 終端狀態覆寫
-        # collision
-        if lmin < r_usv:
-            self.termination = True
-            reward = -100.0
-
-        # 到達目標
-        if dist < self.info['goal_range']:
-            self.termination = True
-            reward = +100.0
-
         return float(reward)
 
     def close(self):
@@ -284,7 +315,7 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
     def __reset_usv_and_goal(self):
         self.__reset_goal(0, 0, random.uniform(-np.pi, np.pi))
         self.__reset_usv_pose(
-            self.info['reset_range']*random.uniform(0.6, 1),
+            self.info['reset_range']*random.uniform(self.info['reset_weight'], 1),
             0.0,
             random.uniform(-np.pi, np.pi)
             )
