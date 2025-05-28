@@ -55,7 +55,7 @@ class GazeboBaseModel:
                 rospy.logerr(f"Service call to {service_name} failed: {e}")
         return None
 
-    def apply_force(self, force=Vector3(), torque=Vector3(), point=Point()):
+    def apply_force(self, force=Vector3(), torque=Vector3(), point=Point(), dt=0.04):
         service_name = '/gazebo/apply_body_wrench'
         if self.__wait_for_service_safe(service_name):
             try:
@@ -68,7 +68,7 @@ class GazeboBaseModel:
                     reference_point=point,
                     wrench=wrench,
                     start_time=rospy.Time(0.0),
-                    duration=rospy.Duration(0.04)
+                    duration=rospy.Duration(dt)
                 )
             except rospy.ServiceException as e:
                 rospy.logerr(f"Service call to {service_name} failed: {e}")
