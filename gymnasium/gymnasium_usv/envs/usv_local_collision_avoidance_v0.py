@@ -372,7 +372,7 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
                 pos_range * np.sin(angle), 
                 0.0
             ])
-            obstacle_angle = np.arctan2(-pose[1], target_range - pose[0]) + random.uniform(-np.pi/12, np.pi/12)
+            obstacle_angle = np.arctan2(-pose[1], target_range - pose[0]) + random.uniform(-np.pi/6, np.pi/6)
             pose[2] = (obstacle_angle + np.pi) % (2 * np.pi) - np.pi
             speed = random.uniform(0, self.info['obstacle_max_speed'])
             if pos_range <= self.info['safe_laser_range']*2:
