@@ -14,7 +14,7 @@ from rosgraph_msgs.msg import Clock
 
 from gymnasium_usv.utils import (
     GazeboUSVModel,
-    GazeboBaseModel,
+    GazeboDynamicModel,
     GazeboROSConnector
 )
 def navigate(heading_diff: float,
@@ -61,8 +61,9 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         *,
         usv_name: str = "js",
         max_steps: int = 512,
-        enable_obstacle: bool = False,
-        obstacle_max_speed: float = 5.0,
+        obstacle_max_speed: float = 10.0,
+        obstacle_numbers: int = 4,
+        obstacle_name: str = 'redball',
         reset_range: float = 200.0,
         step_hz: float = 10.0,
         pid_hz: float = 100.0,
@@ -75,6 +76,9 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
             'usv_name': usv_name,
             'reset_range': reset_range,
             'reset_weight': 0.5,  # 重置時，x 軸的隨機範圍
+            'obstacle_numbers': obstacle_numbers,
+            'obstacle_max_speed': obstacle_max_speed,  # 障礙物最大速度
+            'obstacle_name': obstacle_name,  # 障礙物名稱
             'step_dt': rospy.Duration(1.0 / step_hz),  # how much sim‐time each step should advance
             'pid_dt': rospy.Duration(1.0 / pid_hz),    # how much sim‐time each PID step should advance
             'current_step': 0,
@@ -109,6 +113,23 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         rospy.Subscriber('/clock', Clock, self._clock_cb)
         rospy.wait_for_message('/clock', Clock)
         self.usv = GazeboUSVModel(usv_name)
+        self.obstacles = []
+        if self.info['obstacle_numbers'] > 0:
+            init_range = 1000
+            d_angle = 2 * np.pi / self.info['obstacle_numbers']
+            for i in range(self.info['obstacle_numbers']):
+                obstacle = GazeboDynamicModel(
+                    name=f"{self.info['obstacle_name']}_{i}",
+                    init_pose=Pose(
+                        position=Point(
+                            x=init_range * np.cos(i * d_angle),
+                            y=init_range * np.sin(i * d_angle),
+                            z=0.0
+                        )
+                    ),
+                    max_speed=self.info['obstacle_max_speed']
+                )
+                self.obstacles.append(obstacle)
         self.gazebo = GazeboROSConnector()
         self.gazebo.unpause_physics()
         
@@ -158,12 +179,22 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         )
         action[0] = nav_action[0] * action_weight + action[0] * (1 - action_weight)
         action[1] = nav_action[1] * action_weight + action[1] * (1 - action_weight)
-        self.usv.step(action, dt=self.info['pid_dt'].to_sec())
+        
         self.info['current_step'] += 1
         start = self.info['clock']
+
+        self.usv.step(action, dt=self.info['pid_dt'].to_sec())
+        if self.info['obstacle_numbers'] > 0:
+            for obstacle in self.obstacles:
+                obstacle.step(dt=self.info['pid_dt'].to_sec())
+        
         while self.info['clock'] < start + self.info['step_dt']:
             rospy.sleep(self.info['pid_dt'].to_sec())
             self.usv.step(action, dt=self.info['pid_dt'].to_sec())
+            if self.info['obstacle_numbers'] > 0:
+                for obstacle in self.obstacles:
+                    obstacle.step(dt=self.info['pid_dt'].to_sec())
+
         self.get_observation()
         self.reward = self.get_reward(action)
         
@@ -195,6 +226,7 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         self.termination = False
         self.truncation = False
         self.__reset_usv_and_goal()
+        self.__reset_obstacles()
         rospy.sleep(1.0)
         self.usv.update_state()
         self.last_data['init_dist_to_goal'] = np.linalg.norm(self.info['goal_pose'][:2] - self.usv.pose[:2])
@@ -323,3 +355,26 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
     def _clock_cb(self, msg: Clock):
         # update our copy of sim-time
         self.info['clock'] = msg.clock
+
+    def __reset_obstacles(self):
+        """
+        Reset the positions of all obstacles to random locations within a specified range.
+        """
+        usv_max_range = self.info['reset_range'] + self.info['safe_laser_range']
+        usv_min_range = self.info['reset_range'] * self.info['reset_weight'] - self.info['safe_laser_range']
+        for obstacle in self.obstacles:
+            pos_range = random.uniform(0, usv_min_range)
+            angle = random.uniform(-1, 1) * np.pi/2
+            target_range = random.uniform(usv_min_range, usv_max_range)
+            # heading vector: x = target_range-pose[0], y = target_range-pose[1]
+            pose = np.array([
+                pos_range * np.cos(angle),
+                pos_range * np.sin(angle), 
+                0.0
+            ])
+            obstacle_angle = np.arctan2(-pose[1], target_range - pose[0]) + random.uniform(-np.pi/12, np.pi/12)
+            pose[2] = (obstacle_angle + np.pi) % (2 * np.pi) - np.pi
+            speed = random.uniform(0, self.info['obstacle_max_speed'])
+            if pos_range <= self.info['safe_laser_range']*2:
+                speed = self.info['obstacle_max_speed']
+            obstacle.reset(pose, target_vel=speed)

@@ -1,6 +1,6 @@
 import rospy
 import numpy as np
-from geometry_msgs.msg import Pose, Twist
+from geometry_msgs.msg import Pose, Twist, Point, Quaternion
 from gazebo_msgs.msg import ContactsState
 from sensor_msgs.msg import LaserScan
 from .gazebo_base_model import GazeboBaseModel
@@ -34,8 +34,17 @@ class GazeboUSVModel(GazeboBaseModel):
         self.local_vel = np.zeros(2)
         self.global_vel = np.zeros(2)
         self.action = np.zeros(2)
-
-        return super(GazeboUSVModel, self).reset(pose)
+        if pose is None:
+            pose = self.init_pose
+            return super(GazeboUSVModel, self).reset()
+        q = R.from_euler('zyx', [pose[2], 0, 0]).as_quat()
+        pose = Pose(
+            position=Point(x=pose[0], y=pose[1], z=0.0),
+            orientation=Quaternion(
+                x=q[0], y=q[1], z=q[2], w=q[3]
+            )
+        )
+        return super(GazeboUSVModel, self).reset(pose)   
 
     def step(self, action = np.zeros(2), dt=0.1):
         
