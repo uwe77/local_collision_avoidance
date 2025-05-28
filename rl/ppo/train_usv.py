@@ -16,10 +16,11 @@ vec_env = make_vec_env(
     env_kwargs={
         "render_mode": "none",
         "usv_name": "js",
-        "enable_obstacle": False,
-        "obstacle_max_speed": 5.0,
+        "obstacle_name": "redball",
+        "obstacle_numbers": 4,
+        "obstacle_max_speed": 10.0,
         "reset_range": 400.0,
-        "reset_weight": 0.1,
+        "reset_weight": 0.5,
         "max_steps": max_steps,},
     n_envs=1
     )
