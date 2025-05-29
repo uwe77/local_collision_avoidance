@@ -34,6 +34,8 @@ def navigate(heading_diff: float,
     """
 
     # --- YAW CONTROL (always active) ---
+    default_speed = 0.5
+    # tou = -2*np.log(default_speed)
     Kp_yaw = 1.0/np.pi  # tune as needed
     yaw_rate_cmd = Kp_yaw * heading_diff
     # saturate to limits
@@ -41,12 +43,12 @@ def navigate(heading_diff: float,
 
     # if heading error > 90°, rotate in place only
     if abs(heading_diff) > np.pi / 2:
-        return 0.0, yaw_rate_cmd
+        return default_speed, yaw_rate_cmd
 
     # --- FORWARD CONTROL (only when roughly facing goal) ---
     forward_vel = goal_dist/ max_track_dist
     # reduce speed when heading_diff nonzero
-    forward_vel *= max(0.0, np.cos(heading_diff))
+    forward_vel *= max(0.0, 1)
     # saturate to limits
     forward_vel_cmd = np.clip(forward_vel, -1.0, 1.0)
     action = np.zeros(2)
@@ -100,7 +102,9 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
             'dist_to_goal': None,
             'total_dist': 0,
             'init_dist_to_goal': None,
-            'track': None,
+            'shaping': 0,
+            'obs': None,
+            'acc': None,
             'vel': None,
         }
         self.obs = None
@@ -163,6 +167,7 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
 
 
     def step(self, action):
+        # ========================= Apply Action =========================
         sigmoid = lambda x: 1 / (1 + np.exp(-5*x)) # x = -1~1
         d_range = self.info['max_laser_dis'] - self.info['safe_laser_range']
         center_range = self.info['safe_laser_range'] + d_range / 2
@@ -170,7 +175,9 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         laser_weight = np.clip(sigmoid((lmin-center_range) / d_range), 0, 1)
         track_weight = np.clip(np.linalg.norm(self.obs['track']) / self.info['max_track_dis'], 0 , 1)
         action_weight = laser_weight * track_weight
+
         self.gazebo.unpause_physics()
+        
         # self.usv.step(action, dt=self.info['step_dt'].to_sec())
         nav_action = navigate(
             heading_diff=np.arctan2(self.obs['track'][1], self.obs['track'][0]),
@@ -182,7 +189,7 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         
         self.info['current_step'] += 1
         start = self.info['clock']
-
+        
         self.usv.step(action, dt=self.info['pid_dt'].to_sec())
         if self.info['obstacle_numbers'] > 0:
             for obstacle in self.obstacles:
@@ -195,14 +202,18 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
                 for obstacle in self.obstacles:
                     obstacle.step(dt=self.info['pid_dt'].to_sec())
 
+        # ========================= Get Observation and Reward =========================
         self.get_observation()
-        self.reward = self.get_reward(action)
-        
+        reward = self.get_reward(action)
+        self.last_data['last_action'] = self.last_data['action']
+        self.last_data['action'] = action.copy()
+        self.reward = reward / self.info['max_steps']
         if self.info['current_step'] >= self.info['max_steps']:
             self.truncation = True
             self.reward = -self.info['max_steps']/5
 
         self.gazebo.pause_physics()
+        
         output = "\rstep:{:4d}, action_weight:{}, track:[{},{}] vel:[{},{}], reward:{}".format(
             self.info['current_step'],
             " {:4.2f}".format(action_weight),
@@ -210,11 +221,12 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
             " {:4.2f}".format(self.obs['track'][1]) if self.obs['track'][1] >= 0 else "{:4.2f}".format(self.obs['track'][1]),
             " {:4.2f}".format(self.obs['vel'][0]) if self.obs['vel'][0] >= 0 else "{:4.2f}".format(self.obs['vel'][0]),
             " {:4.2f}".format(self.obs['vel'][1]) if self.obs['vel'][1] >= 0 else "{:4.2f}".format(self.obs['vel'][1]),
-            " {:4.2f}".format(self.reward) if self.reward >= 0 else "{:4.2f}".format(self.reward),
+            " {:4.2f}".format(reward) if reward >= 0 else "{:4.2f}".format(reward),
         )
         sys.stdout.write(output)
         sys.stdout.flush()
 
+        self.get_observation()
         return self.obs, self.reward, self.termination, self.truncation, self.info
     
     def reset(self, *, seed=None, options=None):
@@ -229,12 +241,13 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         self.__reset_obstacles()
         rospy.sleep(1.0)
         self.usv.update_state()
+        self.last_data['shaping'] = 0.0
+        self.last_data['action'] = np.zeros(self.info['action_shape'])
+        self.last_data['last_action'] = np.zeros(self.info['action_shape'])
         self.last_data['init_dist_to_goal'] = np.linalg.norm(self.info['goal_pose'][:2] - self.usv.pose[:2])
         self.last_data['dist_to_goal'] = self.last_data['init_dist_to_goal']
         self.last_data['total_dist'] = 0
         # self.last_data['laser'] = np.array(self.usv.laser.ranges)
-        self.last_data['track'] = np.zeros(self.info['track_shape'])
-        self.last_data['vel'] = np.zeros(self.info['vel_shape'])
         self.get_observation()
         self.gazebo.pause_physics()
         return self.obs, self.info
@@ -266,51 +279,93 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         return self.obs
 
     def get_reward(self, action):
+        sigmoid = lambda x: 1 / (1 + np.exp(-x)) # x = -1~1
+        operator = lambda x: 1 if x > 0 else -1
         laser = self.obs['laser']
         track = self.obs['track']  # [dist_diff, angle, angle_diff]
         vel = self.obs['vel']
         lmin = laser.min()
 
         # === 基本量 ===
+        weight_p = 1.0
+        weight_v = 1.0
+        weight_a = 0.5
+        weight_w = 1.0
+        weight_c = 3.0
         # dist_t = track[0]
         # heading = track[1]  # difference between heading and target
         dist_t = np.linalg.norm(track)
         heading = np.arctan2(track[1], track[0])
-        v_surge = vel[0]
-        max_v_surge = max(abs(v_surge), 1)  # 避免除以零
 
         goal_range = self.info['goal_range']
         safe_range = self.info['safe_laser_range']
         collision_range = self.info['collision_laser_range']
         max_track_dist = self.info['max_track_dis']
 
+        # =============== nav ==============
         # === 進展獎勵 ===
-        potential_reward = (1+np.cos(heading))/2
+        potential_reward = weight_p*(1+np.cos(heading))/2
 
-        # # === 前進獎勵 ===
-        forward_reward = 0.5 * v_surge if v_surge > 0.03 else 0.0
+        # === 前進獎勵 ===
+        forward_reward = weight_v * (2*sigmoid(vel[0])-1)
 
-        # # === 減速懲罰（靠近時） ===
-        slow_penalty = -0.75 * abs(v_surge) if dist_t < 2 * goal_range else 0.0
+        # === 減速懲罰（靠近時） ===
+        slow_penalty = -abs(forward_reward) if dist_t < 2 * goal_range else 0.0
 
-        # # === 距離獎勵（包含終止條件） ===
+        # === 加速度懲罰 ===
+        last_d_action = self.last_data['action']-self.last_data['last_action']
+        d_acttion = action - self.last_data['action']
+        acc_penalty = -0.5 if last_d_action[0] * d_acttion[0] < 0 else 0.0
+        acc_penalty += -0.5 if last_d_action[1] * d_acttion[1] < 0 else 0.0
+        acc_penalty *= weight_a
+        # ==================================
+
+        # =========== collision avoidance =============
+        # === laser warning ===
+        d_range = self.info['max_laser_dis'] - self.info['safe_laser_range']
+        center_range = self.info['safe_laser_range'] + d_range / 2
+        min_laser_penalty = weight_w * (1-np.clip(sigmoid(-10*(lmin-center_range) / d_range), 0, 1))
+        # === COLREGs 2.5.1 ===
+        colregs_reward = 0.0
+        laser_angles = np.linspace(-np.pi/2, np.pi/2, len(laser))
+        sector_mask = (laser < safe_range)  # consider only lasers in range
+        sector_angles = laser_angles[sector_mask]
+        sector_ranges = laser[sector_mask]
+
+        if len(sector_angles) > 0:
+            danger_angle = sector_angles[np.argmin(sector_ranges)]
+            danger_angle = (danger_angle + np.pi) % (2 * np.pi) - np.pi  # normalize to [-pi, pi]
+            # If danger is to the right (starboard), yaw_rate should be positive (turn left)
+            # If danger is to the left (port), yaw_rate should be nagative (turn right)
+            # If danger is ahead, yaw_rate should be nagative (go right)
+            if np.pi/36 < abs(danger_angle) < np.pi/2:
+                # print("Danger to the right, turning left")
+                colregs_reward += weight_c*(np.sign(-danger_angle) * np.cos(danger_angle) * (2*sigmoid(10*action[1]) -1))
+            elif abs(danger_angle) <= np.pi/36 :
+                colregs_reward += weight_c * np.cos(danger_angle) * (2*sigmoid(-10*action[1]) -1)
+
+        # === 距離獎勵（包含終止條件） ===
         if dist_t < goal_range:
             self.termination = True
-            return self.info['max_steps']/5
+            return self.info['max_steps']
         elif self.usv.contact or lmin < collision_range:
             self.termination = True
-            return -self.info['max_steps']/5
+            return -max(abs(vel[0]),1)*self.info['max_steps']/2
 
         # === 總 shaping reward ===
         # shaping = progress_reward + heading_reward + forward_reward + distance_reward + slow_penalty
-        shaping = potential_reward + forward_reward + slow_penalty
+        shaping = potential_reward + forward_reward + slow_penalty + acc_penalty + min_laser_penalty + colregs_reward
 
         # === reward 使用 shaping 差值 ===
-        if hasattr(self, 'prev_shaping'):
-            reward = (shaping - self.prev_shaping) + potential_reward + forward_reward + slow_penalty
-        else:
-            reward = potential_reward + forward_reward
-        self.prev_shaping = shaping
+        # if hasattr(self, 'prev_shaping'):
+            # reward = (shaping - self.prev_shaping) + potential_reward + forward_reward + slow_penalty
+            # reward = (shaping - self.last_data['shaping']) + potential_reward + forward_reward + slow_penalty + acc_penalty
+        reward = (shaping - self.last_data['shaping']) + forward_reward + min_laser_penalty
+        # else:
+            # reward = potential_reward + forward_reward + slow_penalty
+            # reward = 0.0
+        self.last_data['shaping'] = shaping
+        
         return float(reward)
 
     def close(self):
