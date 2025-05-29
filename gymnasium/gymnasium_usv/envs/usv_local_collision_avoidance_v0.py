@@ -48,9 +48,9 @@ def navigate(heading_diff: float,
     # --- FORWARD CONTROL (only when roughly facing goal) ---
     forward_vel = goal_dist/ max_track_dist
     # reduce speed when heading_diff nonzero
-    forward_vel *= max(0.0, 1)
+    forward_vel *= max(default_speed, np.cos(heading_diff))
     # saturate to limits
-    forward_vel_cmd = np.clip(forward_vel, -1.0, 1.0)
+    forward_vel_cmd = np.clip(forward_vel, -1, 1)
     action = np.zeros(2)
     action[0] = forward_vel_cmd
     action[1] = yaw_rate_cmd
@@ -210,7 +210,7 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         if self.info['current_step'] >= self.info['max_steps']:
             self.truncation = True
             reward = -self.info['max_steps']/5
-            
+
         self.reward = reward / self.info['max_steps']
 
         self.gazebo.pause_physics()
