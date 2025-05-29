@@ -10,7 +10,7 @@ from datetime import date
 
 
 # Parallel environments
-max_steps = 1024
+max_steps = 2048
 vec_env = make_vec_env(
     "gymnasium_usv:usv-local-collision-avoidance-v0", 
     env_kwargs={
