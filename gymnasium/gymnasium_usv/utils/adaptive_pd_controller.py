@@ -46,7 +46,7 @@ class AdaptivePDWithBias:
 
 class ThrusterControllerPD:
     def __init__(self):
-        self.linear_pd = AdaptivePDWithBias(kp=1.0, kd=0.1, kff=1.0, init_input_bias=5.47)
+        self.linear_pd = AdaptivePDWithBias(kp=1.0, kd=0.1, kff=1.0, init_input_bias=5.47, output_limits=(0.0, 1.0))
         self.angular_pd = AdaptivePDWithBias(kp=10.0, kd=1.0, kff=1.0, init_input_bias=0.1)
 
     def step(self, cmd_vel, obs_vel, dt, adapt=True):
@@ -56,7 +56,8 @@ class ThrusterControllerPD:
         thrust = self.linear_pd.compute(linear_cmd, linear_obs, dt, adapt_mode=adapt)
         angle = self.angular_pd.compute(angular_cmd, angular_obs, dt, adapt_mode=adapt)
 
-        return np.array([thrust, angle])
+        # return np.array([thrust, angle])
+        return cmd_vel
 
     def get_debug(self):
         return {

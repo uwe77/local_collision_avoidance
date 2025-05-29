@@ -48,7 +48,7 @@ class GazeboUSVModel(GazeboBaseModel):
 
     def step(self, action = np.zeros(2), dt=0.1):
         
-        action = self.pid.step(action, self.local_vel, dt, adapt=True)
+        action = self.pid.step(action, self.local_vel, dt, adapt=False)
         self.last_alpha = self.alpha_gamma * action + (1 - self.alpha_gamma) * self.last_alpha
         self.action = np.array([x if abs(x) >= 1e-3 else 0 for x in self.last_alpha])
         cmd_vel = Twist()
