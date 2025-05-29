@@ -207,10 +207,11 @@ class USVLocalCollisionAvoidanceV0(gym.Env):
         reward = self.get_reward(action)
         self.last_data['last_action'] = self.last_data['action']
         self.last_data['action'] = action.copy()
-        self.reward = reward / self.info['max_steps']
         if self.info['current_step'] >= self.info['max_steps']:
             self.truncation = True
-            self.reward = -self.info['max_steps']/5
+            reward = -self.info['max_steps']/5
+            
+        self.reward = reward / self.info['max_steps']
 
         self.gazebo.pause_physics()
         
